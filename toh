@@ -1,0 +1,1260 @@
+import tkinter as tk
+from math import ceil
+
+
+CANVAS_W = 900
+CANVAS_H = 520
+DISK_HEIGHT = 22
+PEG_WIDTH = 12
+BASE_HEIGHT = 16
+
+ANIMATION_STEPS = 16
+LIFT_RATIO = 0.28
+
+DISK_COLORS = [
+    "#f94144", "#f3722c", "#f8961e", "#f9c74f",
+    "#90be6d", "#43aa8b", "#577590", "#277da1"
+]
+
+
+class ManualHanoiApp:
+    def __init__(self, root, num_disks=4):
+        self.root = root
+        self.root.title("TOWER OF HANOI")
+        self.canvas = tk.Canvas(root, width=CANVAS_W, height=CANVAS_H, bg="white")
+        self.canvas.pack()
+
+        self.num_disks = max(1, min(10, int(num_disks)))
+        self.pegs = [[], [], []]
+        self.disk_size = {}
+
+
+        self.base_y = int(CANVAS_H * 0.85)
+        self.peg_top = int(CANVAS_H * 0.20)
+        self.peg_bottom = self.base_y
+        self.peg_height = self.peg_bottom - self.peg_top
+        self.peg_x = [int(CANVAS_W * 0.20), int(CANVAS_W * 0.50), int(CANVAS_W * 0.80)]
+
+
+        max_disk_w = int(CANVAS_W * 0.24)
+        min_disk_w = int(max_disk_w * 0.36)
+        if self.num_disks == 1:
+            widths = [max_disk_w]
+        else:
+            widths = [int(min_disk_w + (max_disk_w - min_disk_w) * (i / (self.num_disks - 1)))
+                      for i in range(self.num_disks)]
+        widths.reverse()
+
+
+        self.canvas.create_rectangle(20, self.base_y, CANVAS_W - 20, self.base_y + BASE_HEIGHT, fill="#222")
+        for x in self.peg_x:
+            self.canvas.create_rectangle(x - PEG_WIDTH // 2, self.peg_top, x + PEG_WIDTH // 2, self.peg_bottom,
+                                         fill="#333")
+
+
+        label_y = self.base_y + BASE_HEIGHT + 20
+        label_font = ("Arial", 12, "bold")
+        label_fill = "black"
+        self.canvas.create_text(self.peg_x[0], label_y, text="Source", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[1], label_y, text="Auxiliary", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[2], label_y, text="Destination", font=label_font, fill=label_fill)
+
+
+        for i, w in enumerate(widths, start=1):
+            color = DISK_COLORS[(i - 1) % len(DISK_COLORS)]
+            x = self.peg_x[0]
+            stack_pos = len(self.pegs[0])
+            left = x - w // 2
+            right = x + w // 2
+            top = self.base_y - (stack_pos + 1) * DISK_HEIGHT
+            bottom = self.base_y - stack_pos * DISK_HEIGHT
+            rect = self.canvas.create_rectangle(left, top, right, bottom, fill=color, outline="black")
+            self.pegs[0].append(rect)
+            self.disk_size[rect] = i
+
+
+        ctrl = tk.Frame(root)
+        ctrl.pack(pady=6)
+        self.move_label = tk.Label(ctrl, text="Moves: 0")
+        self.move_label.pack(side="left", padx=8)
+        tk.Button(ctrl, text="Auto Solve", command=self.auto_solve).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Step by Step", command=self.step_by_step).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Pause", command=self.toggle_pause).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Reset", command=self.reset).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Manual Mode", command=self.set_manual_mode).pack(side="left", padx=6)
+        tk.Label(ctrl, text="Delay(ms/frame):").pack(side="left", padx=(12, 2))
+        self.delay_var = tk.IntVar(value=18)
+        tk.Spinbox(ctrl, from_=2, to=200, textvariable=self.delay_var, width=5).pack(side="left")
+
+
+        self.held_disk = None
+        self.held_from = None
+        self.move_count = 0
+        self.is_animating = False
+
+
+        self.auto_seq = []
+        self.auto_index = 0
+        self.paused = False
+        self.is_auto_running = False
+
+
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+
+
+    def top_of_stack_y(self, peg_index):
+        height = len(self.pegs[peg_index])
+        y_bottom = self.base_y - height * DISK_HEIGHT
+        return y_bottom - DISK_HEIGHT
+
+    def disk_center(self, disk_id):
+        c = self.canvas.coords(disk_id)
+        return (c[0] + c[2]) / 2, (c[1] + c[3]) / 2
+
+    def nearest_peg(self, x):
+
+        dists = [abs(x - px) for px in self.peg_x]
+        return dists.index(min(dists))
+
+
+    def animate_lift(self, disk_id, callback=None):
+        coords = self.canvas.coords(disk_id)
+        cur_top = coords[1]
+        lift_y = self.peg_top + int(self.peg_height * LIFT_RATIO)
+        dy = lift_y - cur_top
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, 0, dy / steps)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+    def animate_move_horiz(self, disk_id, target_x, callback=None):
+        cx, _ = self.disk_center(disk_id)
+        dx = target_x - cx
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, dx / steps, 0)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+    def animate_lower(self, disk_id, to_peg, callback=None):
+        coords = self.canvas.coords(disk_id)
+        cur_top = coords[1]
+        target_top = self.top_of_stack_y(to_peg)
+        dy = target_top - cur_top
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, 0, dy / steps)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+
+    def on_canvas_click(self, event):
+        if self.is_animating or self.is_auto_running:
+            return
+        peg = self.nearest_peg(event.x)
+
+        if self.held_disk is None:
+            if not self.pegs[peg]:
+                return
+
+            disk = self.pegs[peg].pop()
+            self.held_disk = disk
+            self.held_from = peg
+
+            self.is_animating = True
+
+            def after_lift():
+                self.is_animating = False
+                self.canvas.itemconfigure(disk, width=3)
+
+            self.animate_lift(disk, callback=after_lift)
+        else:
+
+            target_peg = peg
+            moving_size = self.disk_size[self.held_disk]
+
+            if self.pegs[target_peg]:
+                top_disk = self.pegs[target_peg][-1]
+                top_size = self.disk_size[top_disk]
+
+                if moving_size < top_size:
+                    self.illegal_move_feedback()
+                    self.place_back_to_source()
+                    return
+            self.is_animating = True
+            disk = self.held_disk
+
+            def after_horiz():
+                def after_lower():
+                    self.pegs[target_peg].append(disk)
+                    self.canvas.itemconfigure(disk, width=1)
+                    self.held_disk = None
+                    self.held_from = None
+                    self.is_animating = False
+                    self.move_count += 1
+                    self.move_label.config(text=f"Moves: {self.move_count}")
+                    # check for completion (all disks on peg 2)
+                    if len(self.pegs[2]) == self.num_disks:
+                        self.show_victory()
+
+                self.animate_lower(disk, target_peg, callback=after_lower)
+
+            self.animate_move_horiz(disk, self.peg_x[target_peg], callback=after_horiz)
+
+    def place_back_to_source(self):
+        src = self.held_from
+        disk = self.held_disk
+
+        def after_horiz():
+            def after_lower():
+                self.pegs[src].append(disk)
+                self.canvas.itemconfigure(disk, width=1)
+                self.held_disk = None
+                self.held_from = None
+                self.is_animating = False
+
+            self.animate_lower(disk, src, callback=after_lower)
+
+        self.animate_move_horiz(disk, self.peg_x[src], callback=after_horiz)
+
+    def illegal_move_feedback(self):
+        disk = self.held_disk
+        if disk is None:
+            return
+        orig_outline = self.canvas.itemcget(disk, "outline")
+
+        def flash(i=0):
+            if i % 2 == 0:
+                self.canvas.itemconfigure(disk, outline="red", width=3)
+            else:
+                self.canvas.itemconfigure(disk, outline=orig_outline, width=3)
+            if i < 3:
+                self.root.after(120, lambda: flash(i + 1))
+
+        flash()
+
+    def hanoi_generate(self, n, source, target, aux, seq):
+        if n == 0:
+            return
+        if n == 1:
+            seq.append((source, target))
+        else:
+            self.hanoi_generate(n - 1, source, aux, target, seq)
+            seq.append((source, target))
+            self.hanoi_generate(n - 1, aux, target, source, seq)
+
+    def auto_solve(self):
+        if self.is_animating or self.held_disk is not None or self.is_auto_running:
+            return
+        self.auto_seq = []
+        self.hanoi_generate(self.num_disks, 0, 2, 1, self.auto_seq)
+        self.auto_index = 0
+        self.paused = False
+        self.is_auto_running = True
+        # start automatic progression
+        self.do_next()
+
+    def do_next(self, i=None):
+        if self.paused:
+            return
+        if i is None:
+            i = self.auto_index
+        if i >= len(self.auto_seq):
+            self.finish_auto_solve()
+            return
+        frm, to = self.auto_seq[i]
+        self.auto_index = i + 1
+        self.execute_move(frm, to, after=lambda: self.root.after(150, lambda: self.do_next()))
+
+    def step_by_step(self):
+        if not self.auto_seq:
+            self.auto_seq = []
+            self.hanoi_generate(self.num_disks, 0, 2, 1, self.auto_seq)
+            self.auto_index = 0
+        if self.auto_index < len(self.auto_seq) and not self.is_animating:
+            frm, to = self.auto_seq[self.auto_index]
+            self.auto_index += 1
+            self.execute_move(frm, to)
+
+    def execute_move(self, frm, to, after=None):
+        if not self.pegs[frm]:
+            if after:
+                after()
+            return
+        disk = self.pegs[frm].pop()
+        self.is_animating = True
+
+        def after_horiz():
+            def after_lower():
+                self.pegs[to].append(disk)
+                self.is_animating = False
+                self.move_count += 1
+                self.move_label.config(text=f"Moves: {self.move_count}")
+                if after:
+                    after()
+                if len(self.pegs[2]) == self.num_disks:
+                    self.show_victory()
+                    if self.is_auto_running:
+                        self.finish_auto_solve()
+
+            self.animate_lower(disk, to, callback=after_lower)
+
+        def after_lift():
+            self.animate_move_horiz(disk, self.peg_x[to], callback=after_horiz)
+
+        self.animate_lift(disk, callback=after_lift)
+
+    def toggle_pause(self):
+        if not self.is_auto_running:
+            return
+        self.paused = not self.paused
+
+    def finish_auto_solve(self):
+        self.is_auto_running = False
+        self.paused = False
+        self.auto_seq = []
+        self.auto_index = 0
+
+    def set_manual_mode(self):
+        if self.is_auto_running:
+            self.finish_auto_solve()
+        self.canvas.focus_set()
+
+    def reset(self):
+        if self.is_auto_running:
+            self.finish_auto_solve()
+
+        self.canvas.delete("all")
+        self.pegs = [[], [], []]
+        self.disk_size = {}
+        self.canvas.create_rectangle(20, self.base_y, CANVAS_W - 20, self.base_y + BASE_HEIGHT, fill="#222")
+        for x in self.peg_x:
+            self.canvas.create_rectangle(x - PEG_WIDTH // 2, self.peg_top, x + PEG_WIDTH // 2, self.peg_bottom,
+                                         fill="#333")
+
+        label_y = self.base_y + BASE_HEIGHT + 20
+        label_font = ("Arial", 12, "bold")
+        label_fill = "black"
+        self.canvas.create_text(self.peg_x[0], label_y, text="Source", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[1], label_y, text="Auxiliary", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[2], label_y, text="Destination", font=label_font, fill=label_fill)
+
+        max_disk_w = int(CANVAS_W * 0.24)
+        min_disk_w = int(max_disk_w * 0.36)
+        if self.num_disks == 1:
+            widths = [max_disk_w]
+        else:
+            widths = [int(min_disk_w + (max_disk_w - min_disk_w) * (i / (self.num_disks - 1)))
+                      for i in range(self.num_disks)]
+        widths.reverse()
+        for i, w in enumerate(widths, start=1):
+            color = DISK_COLORS[(i - 1) % len(DISK_COLORS)]
+            x = self.peg_x[0]
+            stack_pos = len(self.pegs[0])
+            left = x - w // 2
+            right = x + w // 2
+            top = self.base_y - (stack_pos + 1) * DISK_HEIGHT
+            bottom = self.base_y - stack_pos * DISK_HEIGHT
+            rect = self.canvas.create_rectangle(left, top, right, bottom, fill=color, outline="black")
+            self.pegs[0].append(rect)
+            self.disk_size[rect] = i
+
+        self.held_disk = None
+        self.held_from = None
+        self.move_count = 0
+        self.move_label.config(text="Moves: 0")
+
+    def show_victory(self):
+        win = tk.Toplevel(self.root)
+        win.title("You Win!")
+        tk.Label(win, text=f"Congratulations! You solved in {self.move_count} moves.").pack(padx=16, pady=12)
+        tk.Button(win, text="OK", command=win.destroy).pack(pady=(0, 12))
+        win.transient(self.root)
+        win.grab_set()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+
+    def ask_and_start():
+        ask = tk.Toplevel(root)
+        ask.title("Disks")
+        tk.Label(ask, text="Enter number of disks (recommended 3-7):").pack(padx=12, pady=6)
+        ent = tk.Entry(ask)
+        ent.pack(padx=12, pady=6)
+        ent.insert(0, "4")
+
+        def ok():
+            try:
+                n = int(ent.get())
+            except:
+                n = 4
+            ask.destroy()
+            ManualHanoiApp(root, n)
+
+        tk.Button(ask, text="OK", command=ok).pack(pady=(0, 12))
+        ask.transient(root)
+        ask.grab_set()
+        root.wait_window(ask)
+
+    ask_and_start()
+    root.mainloop()
+import tkinter as tk
+from math import ceil
+
+
+CANVAS_W = 900
+CANVAS_H = 520
+DISK_HEIGHT = 22
+PEG_WIDTH = 12
+BASE_HEIGHT = 16
+
+ANIMATION_STEPS = 16
+LIFT_RATIO = 0.28
+
+DISK_COLORS = [
+    "#f94144", "#f3722c", "#f8961e", "#f9c74f",
+    "#90be6d", "#43aa8b", "#577590", "#277da1"
+]
+
+
+class ManualHanoiApp:
+    def __init__(self, root, num_disks=4):
+        self.root = root
+        self.root.title("TOWER OF HANOI")
+        self.canvas = tk.Canvas(root, width=CANVAS_W, height=CANVAS_H, bg="white")
+        self.canvas.pack()
+
+        self.num_disks = max(1, min(10, int(num_disks)))
+        self.pegs = [[], [], []]
+        self.disk_size = {}
+
+
+        self.base_y = int(CANVAS_H * 0.85)
+        self.peg_top = int(CANVAS_H * 0.20)
+        self.peg_bottom = self.base_y
+        self.peg_height = self.peg_bottom - self.peg_top
+        self.peg_x = [int(CANVAS_W * 0.20), int(CANVAS_W * 0.50), int(CANVAS_W * 0.80)]
+
+
+        max_disk_w = int(CANVAS_W * 0.24)
+        min_disk_w = int(max_disk_w * 0.36)
+        if self.num_disks == 1:
+            widths = [max_disk_w]
+        else:
+            widths = [int(min_disk_w + (max_disk_w - min_disk_w) * (i / (self.num_disks - 1)))
+                      for i in range(self.num_disks)]
+        widths.reverse()
+
+
+        self.canvas.create_rectangle(20, self.base_y, CANVAS_W - 20, self.base_y + BASE_HEIGHT, fill="#222")
+        for x in self.peg_x:
+            self.canvas.create_rectangle(x - PEG_WIDTH // 2, self.peg_top, x + PEG_WIDTH // 2, self.peg_bottom,
+                                         fill="#333")
+
+
+        label_y = self.base_y + BASE_HEIGHT + 20
+        label_font = ("Arial", 12, "bold")
+        label_fill = "black"
+        self.canvas.create_text(self.peg_x[0], label_y, text="Source", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[1], label_y, text="Auxiliary", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[2], label_y, text="Destination", font=label_font, fill=label_fill)
+
+
+        for i, w in enumerate(widths, start=1):
+            color = DISK_COLORS[(i - 1) % len(DISK_COLORS)]
+            x = self.peg_x[0]
+            stack_pos = len(self.pegs[0])
+            left = x - w // 2
+            right = x + w // 2
+            top = self.base_y - (stack_pos + 1) * DISK_HEIGHT
+            bottom = self.base_y - stack_pos * DISK_HEIGHT
+            rect = self.canvas.create_rectangle(left, top, right, bottom, fill=color, outline="black")
+            self.pegs[0].append(rect)
+            self.disk_size[rect] = i
+
+
+        ctrl = tk.Frame(root)
+        ctrl.pack(pady=6)
+        self.move_label = tk.Label(ctrl, text="Moves: 0")
+        self.move_label.pack(side="left", padx=8)
+        tk.Button(ctrl, text="Auto Solve", command=self.auto_solve).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Step by Step", command=self.step_by_step).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Pause", command=self.toggle_pause).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Reset", command=self.reset).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Manual Mode", command=self.set_manual_mode).pack(side="left", padx=6)
+        tk.Label(ctrl, text="Delay(ms/frame):").pack(side="left", padx=(12, 2))
+        self.delay_var = tk.IntVar(value=18)
+        tk.Spinbox(ctrl, from_=2, to=200, textvariable=self.delay_var, width=5).pack(side="left")
+
+
+        self.held_disk = None
+        self.held_from = None
+        self.move_count = 0
+        self.is_animating = False
+
+
+        self.auto_seq = []
+        self.auto_index = 0
+        self.paused = False
+        self.is_auto_running = False
+
+
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+
+
+    def top_of_stack_y(self, peg_index):
+        height = len(self.pegs[peg_index])
+        y_bottom = self.base_y - height * DISK_HEIGHT
+        return y_bottom - DISK_HEIGHT
+
+    def disk_center(self, disk_id):
+        c = self.canvas.coords(disk_id)
+        return (c[0] + c[2]) / 2, (c[1] + c[3]) / 2
+
+    def nearest_peg(self, x):
+
+        dists = [abs(x - px) for px in self.peg_x]
+        return dists.index(min(dists))
+
+
+    def animate_lift(self, disk_id, callback=None):
+        coords = self.canvas.coords(disk_id)
+        cur_top = coords[1]
+        lift_y = self.peg_top + int(self.peg_height * LIFT_RATIO)
+        dy = lift_y - cur_top
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, 0, dy / steps)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+    def animate_move_horiz(self, disk_id, target_x, callback=None):
+        cx, _ = self.disk_center(disk_id)
+        dx = target_x - cx
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, dx / steps, 0)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+    def animate_lower(self, disk_id, to_peg, callback=None):
+        coords = self.canvas.coords(disk_id)
+        cur_top = coords[1]
+        target_top = self.top_of_stack_y(to_peg)
+        dy = target_top - cur_top
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, 0, dy / steps)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+
+    def on_canvas_click(self, event):
+        if self.is_animating or self.is_auto_running:
+            return
+        peg = self.nearest_peg(event.x)
+
+        if self.held_disk is None:
+            if not self.pegs[peg]:
+                return
+
+            disk = self.pegs[peg].pop()
+            self.held_disk = disk
+            self.held_from = peg
+
+            self.is_animating = True
+
+            def after_lift():
+                self.is_animating = False
+                self.canvas.itemconfigure(disk, width=3)
+
+            self.animate_lift(disk, callback=after_lift)
+        else:
+
+            target_peg = peg
+            moving_size = self.disk_size[self.held_disk]
+
+            if self.pegs[target_peg]:
+                top_disk = self.pegs[target_peg][-1]
+                top_size = self.disk_size[top_disk]
+
+                if moving_size < top_size:
+                    self.illegal_move_feedback()
+                    self.place_back_to_source()
+                    return
+            self.is_animating = True
+            disk = self.held_disk
+
+            def after_horiz():
+                def after_lower():
+                    self.pegs[target_peg].append(disk)
+                    self.canvas.itemconfigure(disk, width=1)
+                    self.held_disk = None
+                    self.held_from = None
+                    self.is_animating = False
+                    self.move_count += 1
+                    self.move_label.config(text=f"Moves: {self.move_count}")
+                    # check for completion (all disks on peg 2)
+                    if len(self.pegs[2]) == self.num_disks:
+                        self.show_victory()
+
+                self.animate_lower(disk, target_peg, callback=after_lower)
+
+            self.animate_move_horiz(disk, self.peg_x[target_peg], callback=after_horiz)
+
+    def place_back_to_source(self):
+        src = self.held_from
+        disk = self.held_disk
+
+        def after_horiz():
+            def after_lower():
+                self.pegs[src].append(disk)
+                self.canvas.itemconfigure(disk, width=1)
+                self.held_disk = None
+                self.held_from = None
+                self.is_animating = False
+
+            self.animate_lower(disk, src, callback=after_lower)
+
+        self.animate_move_horiz(disk, self.peg_x[src], callback=after_horiz)
+
+    def illegal_move_feedback(self):
+        disk = self.held_disk
+        if disk is None:
+            return
+        orig_outline = self.canvas.itemcget(disk, "outline")
+
+        def flash(i=0):
+            if i % 2 == 0:
+                self.canvas.itemconfigure(disk, outline="red", width=3)
+            else:
+                self.canvas.itemconfigure(disk, outline=orig_outline, width=3)
+            if i < 3:
+                self.root.after(120, lambda: flash(i + 1))
+
+        flash()
+
+    def hanoi_generate(self, n, source, target, aux, seq):
+        if n == 0:
+            return
+        if n == 1:
+            seq.append((source, target))
+        else:
+            self.hanoi_generate(n - 1, source, aux, target, seq)
+            seq.append((source, target))
+            self.hanoi_generate(n - 1, aux, target, source, seq)
+
+    def auto_solve(self):
+        if self.is_animating or self.held_disk is not None or self.is_auto_running:
+            return
+        self.auto_seq = []
+        self.hanoi_generate(self.num_disks, 0, 2, 1, self.auto_seq)
+        self.auto_index = 0
+        self.paused = False
+        self.is_auto_running = True
+        # start automatic progression
+        self.do_next()
+
+    def do_next(self, i=None):
+        if self.paused:
+            return
+        if i is None:
+            i = self.auto_index
+        if i >= len(self.auto_seq):
+            self.finish_auto_solve()
+            return
+        frm, to = self.auto_seq[i]
+        self.auto_index = i + 1
+        self.execute_move(frm, to, after=lambda: self.root.after(150, lambda: self.do_next()))
+
+    def step_by_step(self):
+        if not self.auto_seq:
+            self.auto_seq = []
+            self.hanoi_generate(self.num_disks, 0, 2, 1, self.auto_seq)
+            self.auto_index = 0
+        if self.auto_index < len(self.auto_seq) and not self.is_animating:
+            frm, to = self.auto_seq[self.auto_index]
+            self.auto_index += 1
+            self.execute_move(frm, to)
+
+    def execute_move(self, frm, to, after=None):
+        if not self.pegs[frm]:
+            if after:
+                after()
+            return
+        disk = self.pegs[frm].pop()
+        self.is_animating = True
+
+        def after_horiz():
+            def after_lower():
+                self.pegs[to].append(disk)
+                self.is_animating = False
+                self.move_count += 1
+                self.move_label.config(text=f"Moves: {self.move_count}")
+                if after:
+                    after()
+                if len(self.pegs[2]) == self.num_disks:
+                    self.show_victory()
+                    if self.is_auto_running:
+                        self.finish_auto_solve()
+
+            self.animate_lower(disk, to, callback=after_lower)
+
+        def after_lift():
+            self.animate_move_horiz(disk, self.peg_x[to], callback=after_horiz)
+
+        self.animate_lift(disk, callback=after_lift)
+
+    def toggle_pause(self):
+        if not self.is_auto_running:
+            return
+        self.paused = not self.paused
+
+    def finish_auto_solve(self):
+        self.is_auto_running = False
+        self.paused = False
+        self.auto_seq = []
+        self.auto_index = 0
+
+    def set_manual_mode(self):
+        if self.is_auto_running:
+            self.finish_auto_solve()
+        self.canvas.focus_set()
+
+    def reset(self):
+        if self.is_auto_running:
+            self.finish_auto_solve()
+
+        self.canvas.delete("all")
+        self.pegs = [[], [], []]
+        self.disk_size = {}
+        self.canvas.create_rectangle(20, self.base_y, CANVAS_W - 20, self.base_y + BASE_HEIGHT, fill="#222")
+        for x in self.peg_x:
+            self.canvas.create_rectangle(x - PEG_WIDTH // 2, self.peg_top, x + PEG_WIDTH // 2, self.peg_bottom,
+                                         fill="#333")
+
+        label_y = self.base_y + BASE_HEIGHT + 20
+        label_font = ("Arial", 12, "bold")
+        label_fill = "black"
+        self.canvas.create_text(self.peg_x[0], label_y, text="Source", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[1], label_y, text="Auxiliary", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[2], label_y, text="Destination", font=label_font, fill=label_fill)
+
+        max_disk_w = int(CANVAS_W * 0.24)
+        min_disk_w = int(max_disk_w * 0.36)
+        if self.num_disks == 1:
+            widths = [max_disk_w]
+        else:
+            widths = [int(min_disk_w + (max_disk_w - min_disk_w) * (i / (self.num_disks - 1)))
+                      for i in range(self.num_disks)]
+        widths.reverse()
+        for i, w in enumerate(widths, start=1):
+            color = DISK_COLORS[(i - 1) % len(DISK_COLORS)]
+            x = self.peg_x[0]
+            stack_pos = len(self.pegs[0])
+            left = x - w // 2
+            right = x + w // 2
+            top = self.base_y - (stack_pos + 1) * DISK_HEIGHT
+            bottom = self.base_y - stack_pos * DISK_HEIGHT
+            rect = self.canvas.create_rectangle(left, top, right, bottom, fill=color, outline="black")
+            self.pegs[0].append(rect)
+            self.disk_size[rect] = i
+
+        self.held_disk = None
+        self.held_from = None
+        self.move_count = 0
+        self.move_label.config(text="Moves: 0")
+
+    def show_victory(self):
+        win = tk.Toplevel(self.root)
+        win.title("You Win!")
+        tk.Label(win, text=f"Congratulations! You solved in {self.move_count} moves.").pack(padx=16, pady=12)
+        tk.Button(win, text="OK", command=win.destroy).pack(pady=(0, 12))
+        win.transient(self.root)
+        win.grab_set()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+
+    def ask_and_start():
+        ask = tk.Toplevel(root)
+        ask.title("Disks")
+        tk.Label(ask, text="Enter number of disks (recommended 3-7):").pack(padx=12, pady=6)
+        ent = tk.Entry(ask)
+        ent.pack(padx=12, pady=6)
+        ent.insert(0, "4")
+
+        def ok():
+            try:
+                n = int(ent.get())
+            except:
+                n = 4
+            ask.destroy()
+            ManualHanoiApp(root, n)
+
+        tk.Button(ask, text="OK", command=ok).pack(pady=(0, 12))
+        ask.transient(root)
+        ask.grab_set()
+        root.wait_window(ask)
+
+    ask_and_start()
+    root.mainloop()
+import tkinter as tk
+from math import ceil
+
+
+CANVAS_W = 900
+CANVAS_H = 520
+DISK_HEIGHT = 22
+PEG_WIDTH = 12
+BASE_HEIGHT = 16
+
+ANIMATION_STEPS = 16
+LIFT_RATIO = 0.28
+
+DISK_COLORS = [
+    "#f94144", "#f3722c", "#f8961e", "#f9c74f",
+    "#90be6d", "#43aa8b", "#577590", "#277da1"
+]
+
+
+class ManualHanoiApp:
+    def __init__(self, root, num_disks=4):
+        self.root = root
+        self.root.title("TOWER OF HANOI")
+        self.canvas = tk.Canvas(root, width=CANVAS_W, height=CANVAS_H, bg="white")
+        self.canvas.pack()
+
+        self.num_disks = max(1, min(10, int(num_disks)))
+        self.pegs = [[], [], []]
+        self.disk_size = {}
+
+
+        self.base_y = int(CANVAS_H * 0.85)
+        self.peg_top = int(CANVAS_H * 0.20)
+        self.peg_bottom = self.base_y
+        self.peg_height = self.peg_bottom - self.peg_top
+        self.peg_x = [int(CANVAS_W * 0.20), int(CANVAS_W * 0.50), int(CANVAS_W * 0.80)]
+
+
+        max_disk_w = int(CANVAS_W * 0.24)
+        min_disk_w = int(max_disk_w * 0.36)
+        if self.num_disks == 1:
+            widths = [max_disk_w]
+        else:
+            widths = [int(min_disk_w + (max_disk_w - min_disk_w) * (i / (self.num_disks - 1)))
+                      for i in range(self.num_disks)]
+        widths.reverse()
+
+
+        self.canvas.create_rectangle(20, self.base_y, CANVAS_W - 20, self.base_y + BASE_HEIGHT, fill="#222")
+        for x in self.peg_x:
+            self.canvas.create_rectangle(x - PEG_WIDTH // 2, self.peg_top, x + PEG_WIDTH // 2, self.peg_bottom,
+                                         fill="#333")
+
+
+        label_y = self.base_y + BASE_HEIGHT + 20
+        label_font = ("Arial", 12, "bold")
+        label_fill = "black"
+        self.canvas.create_text(self.peg_x[0], label_y, text="Source", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[1], label_y, text="Auxiliary", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[2], label_y, text="Destination", font=label_font, fill=label_fill)
+
+
+        for i, w in enumerate(widths, start=1):
+            color = DISK_COLORS[(i - 1) % len(DISK_COLORS)]
+            x = self.peg_x[0]
+            stack_pos = len(self.pegs[0])
+            left = x - w // 2
+            right = x + w // 2
+            top = self.base_y - (stack_pos + 1) * DISK_HEIGHT
+            bottom = self.base_y - stack_pos * DISK_HEIGHT
+            rect = self.canvas.create_rectangle(left, top, right, bottom, fill=color, outline="black")
+            self.pegs[0].append(rect)
+            self.disk_size[rect] = i
+
+
+        ctrl = tk.Frame(root)
+        ctrl.pack(pady=6)
+        self.move_label = tk.Label(ctrl, text="Moves: 0")
+        self.move_label.pack(side="left", padx=8)
+        tk.Button(ctrl, text="Auto Solve", command=self.auto_solve).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Step by Step", command=self.step_by_step).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Pause", command=self.toggle_pause).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Reset", command=self.reset).pack(side="left", padx=6)
+        tk.Button(ctrl, text="Manual Mode", command=self.set_manual_mode).pack(side="left", padx=6)
+        tk.Label(ctrl, text="Delay(ms/frame):").pack(side="left", padx=(12, 2))
+        self.delay_var = tk.IntVar(value=18)
+        tk.Spinbox(ctrl, from_=2, to=200, textvariable=self.delay_var, width=5).pack(side="left")
+
+
+        self.held_disk = None
+        self.held_from = None
+        self.move_count = 0
+        self.is_animating = False
+
+
+        self.auto_seq = []
+        self.auto_index = 0
+        self.paused = False
+        self.is_auto_running = False
+
+
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+
+
+    def top_of_stack_y(self, peg_index):
+        height = len(self.pegs[peg_index])
+        y_bottom = self.base_y - height * DISK_HEIGHT
+        return y_bottom - DISK_HEIGHT
+
+    def disk_center(self, disk_id):
+        c = self.canvas.coords(disk_id)
+        return (c[0] + c[2]) / 2, (c[1] + c[3]) / 2
+
+    def nearest_peg(self, x):
+
+        dists = [abs(x - px) for px in self.peg_x]
+        return dists.index(min(dists))
+
+
+    def animate_lift(self, disk_id, callback=None):
+        coords = self.canvas.coords(disk_id)
+        cur_top = coords[1]
+        lift_y = self.peg_top + int(self.peg_height * LIFT_RATIO)
+        dy = lift_y - cur_top
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, 0, dy / steps)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+    def animate_move_horiz(self, disk_id, target_x, callback=None):
+        cx, _ = self.disk_center(disk_id)
+        dx = target_x - cx
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, dx / steps, 0)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+    def animate_lower(self, disk_id, to_peg, callback=None):
+        coords = self.canvas.coords(disk_id)
+        cur_top = coords[1]
+        target_top = self.top_of_stack_y(to_peg)
+        dy = target_top - cur_top
+        steps = ANIMATION_STEPS
+
+        def step(i=0):
+            if i < steps:
+                self.canvas.move(disk_id, 0, dy / steps)
+                self.root.after(self.delay_var.get(), lambda: step(i + 1))
+            else:
+                if callback:
+                    callback()
+
+        step()
+
+
+    def on_canvas_click(self, event):
+        if self.is_animating or self.is_auto_running:
+            return
+        peg = self.nearest_peg(event.x)
+
+        if self.held_disk is None:
+            if not self.pegs[peg]:
+                return
+
+            disk = self.pegs[peg].pop()
+            self.held_disk = disk
+            self.held_from = peg
+
+            self.is_animating = True
+
+            def after_lift():
+                self.is_animating = False
+                self.canvas.itemconfigure(disk, width=3)
+
+            self.animate_lift(disk, callback=after_lift)
+        else:
+
+            target_peg = peg
+            moving_size = self.disk_size[self.held_disk]
+
+            if self.pegs[target_peg]:
+                top_disk = self.pegs[target_peg][-1]
+                top_size = self.disk_size[top_disk]
+
+                if moving_size < top_size:
+                    self.illegal_move_feedback()
+                    self.place_back_to_source()
+                    return
+            self.is_animating = True
+            disk = self.held_disk
+
+            def after_horiz():
+                def after_lower():
+                    self.pegs[target_peg].append(disk)
+                    self.canvas.itemconfigure(disk, width=1)
+                    self.held_disk = None
+                    self.held_from = None
+                    self.is_animating = False
+                    self.move_count += 1
+                    self.move_label.config(text=f"Moves: {self.move_count}")
+                    # check for completion (all disks on peg 2)
+                    if len(self.pegs[2]) == self.num_disks:
+                        self.show_victory()
+
+                self.animate_lower(disk, target_peg, callback=after_lower)
+
+            self.animate_move_horiz(disk, self.peg_x[target_peg], callback=after_horiz)
+
+    def place_back_to_source(self):
+        src = self.held_from
+        disk = self.held_disk
+
+        def after_horiz():
+            def after_lower():
+                self.pegs[src].append(disk)
+                self.canvas.itemconfigure(disk, width=1)
+                self.held_disk = None
+                self.held_from = None
+                self.is_animating = False
+
+            self.animate_lower(disk, src, callback=after_lower)
+
+        self.animate_move_horiz(disk, self.peg_x[src], callback=after_horiz)
+
+    def illegal_move_feedback(self):
+        disk = self.held_disk
+        if disk is None:
+            return
+        orig_outline = self.canvas.itemcget(disk, "outline")
+
+        def flash(i=0):
+            if i % 2 == 0:
+                self.canvas.itemconfigure(disk, outline="red", width=3)
+            else:
+                self.canvas.itemconfigure(disk, outline=orig_outline, width=3)
+            if i < 3:
+                self.root.after(120, lambda: flash(i + 1))
+
+        flash()
+
+    def hanoi_generate(self, n, source, target, aux, seq):
+        if n == 0:
+            return
+        if n == 1:
+            seq.append((source, target))
+        else:
+            self.hanoi_generate(n - 1, source, aux, target, seq)
+            seq.append((source, target))
+            self.hanoi_generate(n - 1, aux, target, source, seq)
+
+    def auto_solve(self):
+        if self.is_animating or self.held_disk is not None or self.is_auto_running:
+            return
+        self.auto_seq = []
+        self.hanoi_generate(self.num_disks, 0, 2, 1, self.auto_seq)
+        self.auto_index = 0
+        self.paused = False
+        self.is_auto_running = True
+        # start automatic progression
+        self.do_next()
+
+    def do_next(self, i=None):
+        if self.paused:
+            return
+        if i is None:
+            i = self.auto_index
+        if i >= len(self.auto_seq):
+            self.finish_auto_solve()
+            return
+        frm, to = self.auto_seq[i]
+        self.auto_index = i + 1
+        self.execute_move(frm, to, after=lambda: self.root.after(150, lambda: self.do_next()))
+
+    def step_by_step(self):
+        if not self.auto_seq:
+            self.auto_seq = []
+            self.hanoi_generate(self.num_disks, 0, 2, 1, self.auto_seq)
+            self.auto_index = 0
+        if self.auto_index < len(self.auto_seq) and not self.is_animating:
+            frm, to = self.auto_seq[self.auto_index]
+            self.auto_index += 1
+            self.execute_move(frm, to)
+
+    def execute_move(self, frm, to, after=None):
+        if not self.pegs[frm]:
+            if after:
+                after()
+            return
+        disk = self.pegs[frm].pop()
+        self.is_animating = True
+
+        def after_horiz():
+            def after_lower():
+                self.pegs[to].append(disk)
+                self.is_animating = False
+                self.move_count += 1
+                self.move_label.config(text=f"Moves: {self.move_count}")
+                if after:
+                    after()
+                if len(self.pegs[2]) == self.num_disks:
+                    self.show_victory()
+                    if self.is_auto_running:
+                        self.finish_auto_solve()
+
+            self.animate_lower(disk, to, callback=after_lower)
+
+        def after_lift():
+            self.animate_move_horiz(disk, self.peg_x[to], callback=after_horiz)
+
+        self.animate_lift(disk, callback=after_lift)
+
+    def toggle_pause(self):
+        if not self.is_auto_running:
+            return
+        self.paused = not self.paused
+
+    def finish_auto_solve(self):
+        self.is_auto_running = False
+        self.paused = False
+        self.auto_seq = []
+        self.auto_index = 0
+
+    def set_manual_mode(self):
+        if self.is_auto_running:
+            self.finish_auto_solve()
+        self.canvas.focus_set()
+
+    def reset(self):
+        if self.is_auto_running:
+            self.finish_auto_solve()
+
+        self.canvas.delete("all")
+        self.pegs = [[], [], []]
+        self.disk_size = {}
+        self.canvas.create_rectangle(20, self.base_y, CANVAS_W - 20, self.base_y + BASE_HEIGHT, fill="#222")
+        for x in self.peg_x:
+            self.canvas.create_rectangle(x - PEG_WIDTH // 2, self.peg_top, x + PEG_WIDTH // 2, self.peg_bottom,
+                                         fill="#333")
+
+        label_y = self.base_y + BASE_HEIGHT + 20
+        label_font = ("Arial", 12, "bold")
+        label_fill = "black"
+        self.canvas.create_text(self.peg_x[0], label_y, text="Source", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[1], label_y, text="Auxiliary", font=label_font, fill=label_fill)
+        self.canvas.create_text(self.peg_x[2], label_y, text="Destination", font=label_font, fill=label_fill)
+
+        max_disk_w = int(CANVAS_W * 0.24)
+        min_disk_w = int(max_disk_w * 0.36)
+        if self.num_disks == 1:
+            widths = [max_disk_w]
+        else:
+            widths = [int(min_disk_w + (max_disk_w - min_disk_w) * (i / (self.num_disks - 1)))
+                      for i in range(self.num_disks)]
+        widths.reverse()
+        for i, w in enumerate(widths, start=1):
+            color = DISK_COLORS[(i - 1) % len(DISK_COLORS)]
+            x = self.peg_x[0]
+            stack_pos = len(self.pegs[0])
+            left = x - w // 2
+            right = x + w // 2
+            top = self.base_y - (stack_pos + 1) * DISK_HEIGHT
+            bottom = self.base_y - stack_pos * DISK_HEIGHT
+            rect = self.canvas.create_rectangle(left, top, right, bottom, fill=color, outline="black")
+            self.pegs[0].append(rect)
+            self.disk_size[rect] = i
+
+        self.held_disk = None
+        self.held_from = None
+        self.move_count = 0
+        self.move_label.config(text="Moves: 0")
+
+    def show_victory(self):
+        win = tk.Toplevel(self.root)
+        win.title("You Win!")
+        tk.Label(win, text=f"Congratulations! You solved in {self.move_count} moves.").pack(padx=16, pady=12)
+        tk.Button(win, text="OK", command=win.destroy).pack(pady=(0, 12))
+        win.transient(self.root)
+        win.grab_set()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+
+    def ask_and_start():
+        ask = tk.Toplevel(root)
+        ask.title("Disks")
+        tk.Label(ask, text="Enter number of disks (recommended 3-7):").pack(padx=12, pady=6)
+        ent = tk.Entry(ask)
+        ent.pack(padx=12, pady=6)
+        ent.insert(0, "4")
+
+        def ok():
+            try:
+                n = int(ent.get())
+            except:
+                n = 4
+            ask.destroy()
+            ManualHanoiApp(root, n)
+
+        tk.Button(ask, text="OK", command=ok).pack(pady=(0, 12))
+        ask.transient(root)
+        ask.grab_set()
+        root.wait_window(ask)
+
+    ask_and_start()
+    root.mainloop()
