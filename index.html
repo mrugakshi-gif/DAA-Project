@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tower of Hanoi</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        #canvas {
+            border: 2px solid #333;
+            background-color: white;
+            cursor: pointer;
+        }
+        .controls {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        button {
+            padding: 8px 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        input[type="number"] {
+            width: 60px;
+            padding: 5px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.4);
+        }
+        .modal-content {
+            background-color: white;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 300px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .modal-button {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>TOWER OF HANOI</h1>
+    <canvas id="canvas" width="900" height="520"></canvas>
+    <div class="controls">
+        <span id="moveLabel">Moves: 0</span>
+        <button onclick="app.autoSolve()">Auto Solve</button>
+        <button onclick="app.stepByStep()">Step by Step</button>
+        <button onclick="app.togglePause()">Pause</button>
+        <button onclick="app.reset()">Reset</button>
+        <button onclick="app.setManualMode()">Manual Mode</button>
+        <label>Delay(ms/frame): <input type="number" id="delay" value="18" min="2" max="200"></label>
+    </div>
+
+    <div id="startModal" class="modal" style="display: block;">
+        <div class="modal-content">
+            <h2>Disks</h2>
+            <p>Enter number of disks (recommended 3-7):</p>
+            <input type="number" id="diskInput" value="4" min="1" max="10">
+            <br>
+            <button class="modal-button" onclick="startGame()">OK</button>
+        </div>
+    </div>
+
+    <div id="victoryModal" class="modal">
+        <div class="modal-content">
+            <h2>You Win!</h2>
+            <p id="victoryMessage"></p>
+            <button class="modal-button" onclick="closeVictory()">OK</button>
+        </div>
+    </div>
+
+    <script>
+        const CANVAS_W = 900;
+        const CANVAS_H = 520;
+        const DISK_HEIGHT = 22;
+        const PEG_WIDTH = 12;
+        const BASE_HEIGHT = 16;
+        const ANIMATION_STEPS = 16;
+        const LIFT_RATIO = 0.28;
+
+        const DISK_COLORS = [
+            "#f94144", "#f3722c", "#f8961e", "#f9c74f",
+            "#90be6d", "#43aa8b", "#577590", "#277da1"
+        ];
+
+        class ManualHanoiApp {
+            constructor(numDisks = 4) {
+                this.canvas = document.getElementById('canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.moveLabel = document.getElementById('moveLabel');
+                this.delayInput = document.getElementById('delay');
+
+                this.numDisks = Math.max(1, Math.min(10, parseInt(numDisks)));
+                this.pegs = [[], [], []];
+                this.diskSize = {};
+
+                this.baseY = Math.floor(CANVAS_H * 0.85);
+                this.pegTop = Math.floor(CANVAS_H * 0.20);
+                this.pegBottom = this.baseY;
+                this.pegHeight = this.pegBottom - this.pegTop;
+                this.pegX = [Math.floor(CANVAS_W * 0.20), Math.floor(CANVAS_W * 0.50), Math.floor(CANVAS_W * 0.80)];
+
+                this.heldDisk = null;
+                this.heldFrom = null;
+                this.moveCount = 0;
+                this.isAnimating = false;
+
+                this.autoSeq = [];
+                this.autoIndex = 0;
+                this.paused = false;
+                this.isAutoRunning = false;
+
+                this.disks = [];
+                this.nextDiskId = 0;
+
+                this.init();
+                this.canvas.addEventListener('click', (e) => this.onCanvasClick(e));
+            }
+
+            init() {
+                this.ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+                const maxDiskW = Math.floor(CANVAS_W * 0.24);
+                const minDiskW = Math.floor(maxDiskW * 0.36);
+                let widths;
+                if (this.numDisks === 1) {
+                    widths = [maxDiskW];
+                } else {
+                    widths = [];
+                    for (let i = 0; i < this.numDisks; i++) {
+                        widths.push(Math.floor(minDiskW + (maxDiskW - minDiskW) * (i / (this.numDisks - 1))));
+                    }
+                    widths.reverse();
+                }
+
+                this.ctx.fillStyle = "#222";
+                this.ctx.fillRect(20, this.baseY, CANVAS_W - 40, BASE_HEIGHT);
+
+                this.ctx.fillStyle = "#333";
+                for (let x of this.pegX) {
+                    this.ctx.fillRect(x - PEG_WIDTH / 2, this.pegTop, PEG_WIDTH, this.pegBottom - this.pegTop);
+                }
+
+                const labelY = this.baseY + BASE_HEIGHT + 20;
+                this.ctx.fillStyle = "black";
+                this.ctx.font = "bold 12px Arial";
+                this.ctx.textAlign = "center";
+                this.ctx.fillText("Source", this.pegX[0], labelY);
+                this.ctx.fillText("Auxiliary", this.pegX[1], labelY);
+                this.ctx.fillText("Destination", this.pegX[2], labelY);
+
+                for (let i = 0; i < widths.length; i++) {
+                    const w = widths[i];
+                    const color = DISK_COLORS[i % DISK_COLORS.length];
+                    const x = this.pegX[0];
+                    const stackPos = this.pegs[0].length;
+                    const left = x - w / 2;
+                    const top = this.baseY - (stackPos + 1) * DISK_HEIGHT;
+                    
+                    const disk = {
+                        id: this.nextDiskId++,
+                        left: left,
+                        top: top,
+                        width: w,
+                        height: DISK_HEIGHT,
+                        color: color,
+                        size: i + 1,
+                        outline: "black",
+                        lineWidth: 1
+                    };
+                    
+                    this.disks.push(disk);
+                    this.pegs[0].push(disk.id);
+                    this.diskSize[disk.id] = disk.size;
+                    this.drawDisk(disk);
+                }
+            }
+
+            drawDisk(disk) {
+                this.ctx.fillStyle = disk.color;
+                this.ctx.fillRect(disk.left, disk.top, disk.width, disk.height);
+                this.ctx.strokeStyle = disk.outline;
+                this.ctx.lineWidth = disk.lineWidth;
+                this.ctx.strokeRect(disk.left, disk.top, disk.width, disk.height);
+            }
+
+            getDisk(id) {
+                return this.disks.find(d => d.id === id);
+            }
+
+            redraw() {
+                this.ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                
+                this.ctx.fillStyle = "#222";
+                this.ctx.fillRect(20, this.baseY, CANVAS_W - 40, BASE_HEIGHT);
+
+                this.ctx.fillStyle = "#333";
+                for (let x of this.pegX) {
+                    this.ctx.fillRect(x - PEG_WIDTH / 2, this.pegTop, PEG_WIDTH, this.pegBottom - this.pegTop);
+                }
+
+                const labelY = this.baseY + BASE_HEIGHT + 20;
+                this.ctx.fillStyle = "black";
+                this.ctx.font = "bold 12px Arial";
+                this.ctx.textAlign = "center";
+                this.ctx.fillText("Source", this.pegX[0], labelY);
+                this.ctx.fillText("Auxiliary", this.pegX[1], labelY);
+                this.ctx.fillText("Destination", this.pegX[2], labelY);
+
+                for (let disk of this.disks) {
+                    this.drawDisk(disk);
+                }
+            }
+
+            topOfStackY(pegIndex) {
+                const height = this.pegs[pegIndex].length;
+                const yBottom = this.baseY - height * DISK_HEIGHT;
+                return yBottom - DISK_HEIGHT;
+            }
+
+            diskCenter(diskId) {
+                const disk = this.getDisk(diskId);
+                return {
+                    x: disk.left + disk.width / 2,
+                    y: disk.top + disk.height / 2
+                };
+            }
+
+            nearestPeg(x) {
+                const dists = this.pegX.map(px => Math.abs(x - px));
+                return dists.indexOf(Math.min(...dists));
+            }
+
+            animateLift(diskId, callback) {
+                const disk = this.getDisk(diskId);
+                const curTop = disk.top;
+                const liftY = this.pegTop + Math.floor(this.pegHeight * LIFT_RATIO);
+                const dy = liftY - curTop;
+                const steps = ANIMATION_STEPS;
+                let i = 0;
+
+                const step = () => {
+                    if (i < steps) {
+                        disk.top += dy / steps;
+                        this.redraw();
+                        i++;
+                        setTimeout(step, parseInt(this.delayInput.value));
+                    } else {
+                        if (callback) callback();
+                    }
+                };
+                step();
+            }
+
+            animateMoveHoriz(diskId, targetX, callback) {
+                const disk = this.getDisk(diskId);
+                const cx = disk.left + disk.width / 2;
+                const dx = targetX - cx;
+                const steps = ANIMATION_STEPS;
+                let i = 0;
+
+                const step = () => {
+                    if (i < steps) {
+                        disk.left += dx / steps;
+                        this.redraw();
+                        i++;
+                        setTimeout(step, parseInt(this.delayInput.value));
+                    } else {
+                        if (callback) callback();
+                    }
+                };
+                step();
+            }
+
+            animateLower(diskId, toPeg, callback) {
+                const disk = this.getDisk(diskId);
+                const curTop = disk.top;
+                const targetTop = this.topOfStackY(toPeg);
+                const dy = targetTop - curTop;
+                const steps = ANIMATION_STEPS;
+                let i = 0;
+
+                const step = () => {
+                    if (i < steps) {
+                        disk.top += dy / steps;
+                        this.redraw();
+                        i++;
+                        setTimeout(step, parseInt(this.delayInput.value));
+                    } else {
+                        if (callback) callback();
+                    }
+                };
+                step();
+            }
+
+            onCanvasClick(event) {
+                if (this.isAnimating || this.isAutoRunning) return;
+                
+                const rect = this.canvas.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const peg = this.nearestPeg(x);
+
+                if (this.heldDisk === null) {
+                    if (this.pegs[peg].length === 0) return;
+
+                    const diskId = this.pegs[peg].pop();
+                    this.heldDisk = diskId;
+                    this.heldFrom = peg;
+                    this.isAnimating = true;
+
+                    this.animateLift(diskId, () => {
+                        this.isAnimating = false;
+                        this.getDisk(diskId).lineWidth = 3;
+                        this.redraw();
+                    });
+                } else {
+                    const targetPeg = peg;
+                    const movingSize = this.diskSize[this.heldDisk];
+
+                    if (this.pegs[targetPeg].length > 0) {
+                        const topDisk = this.pegs[targetPeg][this.pegs[targetPeg].length - 1];
+                        const topSize = this.diskSize[topDisk];
+
+                        if (movingSize < topSize) {
+                            this.illegalMoveFeedback();
+                            this.placeBackToSource();
+                            return;
+                        }
+                    }
+
+                    this.isAnimating = true;
+                    const diskId = this.heldDisk;
+
+                    this.animateMoveHoriz(diskId, this.pegX[targetPeg], () => {
+                        this.animateLower(diskId, targetPeg, () => {
+                            this.pegs[targetPeg].push(diskId);
+                            this.getDisk(diskId).lineWidth = 1;
+                            this.heldDisk = null;
+                            this.heldFrom = null;
+                            this.isAnimating = false;
+                            this.moveCount++;
+                            this.moveLabel.textContent = `Moves: ${this.moveCount}`;
+                            this.redraw();
+
+                            if (this.pegs[2].length === this.numDisks) {
+                                this.showVictory();
+                            }
+                        });
+                    });
+                }
+            }
+
+            placeBackToSource() {
+                const src = this.heldFrom;
+                const diskId = this.heldDisk;
+
+                this.animateMoveHoriz(diskId, this.pegX[src], () => {
+                    this.animateLower(diskId, src, () => {
+                        this.pegs[src].push(diskId);
+                        this.getDisk(diskId).lineWidth = 1;
+                        this.heldDisk = null;
+                        this.heldFrom = null;
+                        this.isAnimating = false;
+                        this.redraw();
+                    });
+                });
+            }
+
+            illegalMoveFeedback() {
+                const disk = this.getDisk(this.heldDisk);
+                if (!disk) return;
+                const origOutline = disk.outline;
+                let i = 0;
+
+                const flash = () => {
+                    if (i % 2 === 0) {
+                        disk.outline = "red";
+                        disk.lineWidth = 3;
+                    } else {
+                        disk.outline = origOutline;
+                        disk.lineWidth = 3;
+                    }
+                    this.redraw();
+                    if (i < 3) {
+                        i++;
+                        setTimeout(flash, 120);
+                    }
+                };
+                flash();
+            }
+
+            hanoiGenerate(n, source, target, aux, seq) {
+                if (n === 0) return;
+                if (n === 1) {
+                    seq.push([source, target]);
+                } else {
+                    this.hanoiGenerate(n - 1, source, aux, target, seq);
+                    seq.push([source, target]);
+                    this.hanoiGenerate(n - 1, aux, target, source, seq);
+                }
+            }
+
+            autoSolve() {
+                if (this.isAnimating || this.heldDisk !== null || this.isAutoRunning) return;
+                this.autoSeq = [];
+                this.hanoiGenerate(this.numDisks, 0, 2, 1, this.autoSeq);
+                this.autoIndex = 0;
+                this.paused = false;
+                this.isAutoRunning = true;
+                this.doNext();
+            }
+
+            doNext() {
+                if (this.paused) return;
+                if (this.autoIndex >= this.autoSeq.length) {
+                    this.finishAutoSolve();
+                    return;
+                }
+                const [frm, to] = this.autoSeq[this.autoIndex];
+                this.autoIndex++;
+                this.executeMove(frm, to, () => {
+                    setTimeout(() => this.doNext(), 150);
+                });
+            }
+
+            stepByStep() {
+                if (this.autoSeq.length === 0) {
+                    this.autoSeq = [];
+                    this.hanoiGenerate(this.numDisks, 0, 2, 1, this.autoSeq);
+                    this.autoIndex = 0;
+                }
+                if (this.autoIndex < this.autoSeq.length && !this.isAnimating) {
+                    const [frm, to] = this.autoSeq[this.autoIndex];
+                    this.autoIndex++;
+                    this.executeMove(frm, to);
+                }
+            }
+
+            executeMove(frm, to, after) {
+                if (this.pegs[frm].length === 0) {
+                    if (after) after();
+                    return;
+                }
+                const diskId = this.pegs[frm].pop();
+                this.isAnimating = true;
+
+                this.animateLift(diskId, () => {
+                    this.animateMoveHoriz(diskId, this.pegX[to], () => {
+                        this.animateLower(diskId, to, () => {
+                            this.pegs[to].push(diskId);
+                            this.isAnimating = false;
+                            this.moveCount++;
+                            this.moveLabel.textContent = `Moves: ${this.moveCount}`;
+                            if (after) after();
+                            if (this.pegs[2].length === this.numDisks) {
+                                this.showVictory();
+                                if (this.isAutoRunning) {
+                                    this.finishAutoSolve();
+                                }
+                            }
+                        });
+                    });
+                });
+            }
+
+            togglePause() {
+                if (!this.isAutoRunning) return;
+                this.paused = !this.paused;
+                if (!this.paused) {
+                    this.doNext();
+                }
+            }
+
+            finishAutoSolve() {
+                this.isAutoRunning = false;
+                this.paused = false;
+                this.autoSeq = [];
+                this.autoIndex = 0;
+            }
+
+            setManualMode() {
+                if (this.isAutoRunning) {
+                    this.finishAutoSolve();
+                }
+            }
+
+            reset() {
+                if (this.isAutoRunning) {
+                    this.finishAutoSolve();
+                }
+
+                this.pegs = [[], [], []];
+                this.diskSize = {};
+                this.disks = [];
+                this.nextDiskId = 0;
+                this.heldDisk = null;
+                this.heldFrom = null;
+                this.moveCount = 0;
+                this.moveLabel.textContent = "Moves: 0";
+                this.autoSeq = [];
+                this.autoIndex = 0;
+
+                this.init();
+            }
+
+            showVictory() {
+                document.getElementById('victoryMessage').textContent = 
+                    `Congratulations! You solved in ${this.moveCount} moves.`;
+                document.getElementById('victoryModal').style.display = 'block';
+            }
+        }
+
+        let app;
+
+        function startGame() {
+            const numDisks = parseInt(document.getElementById('diskInput').value) || 4;
+            document.getElementById('startModal').style.display = 'none';
+            app = new ManualHanoiApp(numDisks);
+        }
+
+        function closeVictory() {
+            document.getElementById('victoryModal').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
